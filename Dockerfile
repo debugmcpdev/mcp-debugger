@@ -1,60 +1,48 @@
-# Stage 1: Build the TypeScript application
+# Stage 1: Build and bundle the TypeScript application
 FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Copy package files and install dependencies
-COPY package.json package-lock.json ./
-# npm ci installs based on package-lock.json, good for reproducible builds
-# Using --only=production might be too aggressive if build scripts need devDependencies
-# but --ignore-scripts is fine. If build needs devDeps, remove --only=production
-RUN npm ci --ignore-scripts
+# Add container marker
+ENV MCP_CONTAINER=true
+WORKDIR /workspace
 
-# Copy tsconfig and source code
+# Copy package files and install ALL dependencies (including dev)
+COPY package.json package-lock.json ./
+RUN npm ci --silent
+
+# Copy source files
 COPY tsconfig.json ./
 COPY src ./src
+COPY scripts ./scripts/
 
-# Build the project (outputs to /app/dist)
-RUN npm run build
+# Build TypeScript first
+RUN npm run build --silent
 
-# Stage 2: Create the final lightweight image
-FROM python:3.11-slim
+# Bundle the application into a single file
+RUN node scripts/bundle.js
+
+# Stage 2: Create minimal runtime image
+FROM python:3.11-alpine
 
 WORKDIR /app
 
-# Install Node.js and debugpy
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends nodejs npm python3-pip && \
-    pip3 install --no-cache-dir debugpy>=1.8.14 && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+# Set container marker for runtime
+ENV MCP_CONTAINER=true
 
-# Copy built application from the builder stage
-COPY --from=builder /app/dist ./dist
+# Install only Node.js runtime (no npm) and Python deps
+RUN apk add --no-cache nodejs && \
+    pip3 install --no-cache-dir debugpy>=1.8.14
 
-# Copy package.json for metadata and potentially runtime non-dev dependencies
-# If there are runtime JS dependencies not bundled into dist, they might need npm install --only=production here
-# For now, assuming 'dist' is self-contained or only needs Node.js runtime.
-COPY package.json .
+# Copy the bundled application, all dist files for proxy dependencies, and package.json
+COPY --from=builder /workspace/dist/ ./dist/
+COPY --from=builder /workspace/package.json ./package.json
 
-# Add OCI labels
-# LABEL org.opencontainers.image.source="https://github.com/your-repo/debug-mcp-server" \
-#       org.opencontainers.image.version="0.1.0" \
-#       org.opencontainers.image.description="Run-time step-through debugging for LLM agents. MCP server for Python debugging via DAP (debugpy)."
-
-# The entrypoint will be node /app/dist/index.js.
-# If the server needs to access files relative to the project root (e.g. examples, tests),
-# those would need to be copied as well. For now, only copying 'dist' and 'package.json'.
-
-# Expose the default MCP port (e.g., 3000 from package.json start script, or as configured)
-# Expose the default debugpy attach port (5679, as per E-1, though debugpy can listen on any)
+# Expose ports
 EXPOSE 3000 5679
 
-# Set the entrypoint to run the Node.js application
-# Note: /app is the WORKDIR
-ENTRYPOINT ["node", "dist/index.js"]
+# Set the entrypoint to run the bundled application
+ENTRYPOINT ["node", "dist/bundle.cjs"]
 
-# Default command arguments (can be overridden)
-# Example: CMD ["http", "--port", "3000", "--log-level", "info"]
-# These are passed to `node dist/index.js <args>`
-# For now, let the server use its defaults or be configured by env vars if possible.
+# Default command arguments
+CMD ["stdio"]

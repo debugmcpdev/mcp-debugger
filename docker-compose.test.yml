@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  mcp-debugger:
+    # image: mcp-debugger:local
+    build: . # Build from the Dockerfile in the current directory
+    stdin_open: true
+    tty: true
+    volumes:
+      - ./:/workspace:rw
+      - ./logs:/tmp:rw
+    command: ["stdio", "--log-level", "debug", "--log-file", "/tmp/mcp-debugger.log"]

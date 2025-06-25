@@ -88,7 +88,7 @@ const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 describe('Python Debugging Workflow - Integration Test', () => {
   let sessionId: string;
-  const scriptPath = 'tests/fixtures/python/debug_test_simple.py'; // Relative to project root
+  const scriptPath = path.resolve('tests/fixtures/python/debug_test_simple.py'); // Absolute path
   const breakpointLine = 14; // Line 'c = a + b' in debug_test_simple.py
 
   beforeAll(async () => {
@@ -138,15 +138,15 @@ describe('Python Debugging Workflow - Integration Test', () => {
     let breakpointRawResult = await client.callTool({ name: 'set_breakpoint', arguments: { sessionId, file: scriptPath, line: breakpointLine } });
     const breakpointResult = parseToolResult(breakpointRawResult);
     expect(breakpointResult.success).toBe(true);
-    // Convert absolute path to relative and normalize separators
-    const relativePath = path.relative(process.cwd(), breakpointResult.file).replace(/\\/g, '/');
-    expect(relativePath).toBe(scriptPath);
+    // Compare absolute paths
+    expect(breakpointResult.file).toBe(scriptPath);
     expect(breakpointResult.line).toBe(breakpointLine);
     console.log(`[Test] Set breakpoint at ${scriptPath}:${breakpointLine}`);
 
     // 4. Start Debugging
     let startRawResult = await client.callTool({ name: 'start_debugging', arguments: { sessionId, scriptPath } });
     const startResult = parseToolResult(startRawResult);
+    console.log('[Test] Start debugging result:', JSON.stringify(startResult, null, 2));
     expect(startResult.success).toBe(true);
     expect(startResult.state).toBe('paused'); 
     console.log('[Test] Started debugging, initially paused (stopOnEntry).');
@@ -224,7 +224,7 @@ describe('Python Debugging Workflow - Integration Test', () => {
     };
 
     console.log('[Test] === Test: Dry Run for start_debugging ===');
-    const scriptToDryRun = 'tests/fixtures/python/debug_test_simple.py'; // Relative to project root
+    const scriptToDryRun = path.resolve('tests/fixtures/python/debug_test_simple.py'); // Absolute path
 
     // Create a new session for the dry run test
     let createDryRunRawResult = await client.callTool({ name: 'create_debug_session', arguments: { language: 'python', name: 'DryRunTestSession' } });
@@ -245,7 +245,10 @@ describe('Python Debugging Workflow - Integration Test', () => {
     });
     const parsedDryRunResult = parseToolResult(startDryRunRawResult);
     
-    console.log('[Test] Dry run start_debugging result:', parsedDryRunResult);
+    console.log('[Test] Dry run start_debugging result:', JSON.stringify(parsedDryRunResult, null, 2));
+    if (!parsedDryRunResult.success) {
+      console.error('[Test] Dry run failed with error:', parsedDryRunResult.error);
+    }
     expect(parsedDryRunResult.success).toBe(true);
     // SessionManager's startDebugging for a successful dry run returns:
     // { success: true, state: session.state (STOPPED), data: { dryRun: true, message: "Dry run spawn command logged by proxy." } };

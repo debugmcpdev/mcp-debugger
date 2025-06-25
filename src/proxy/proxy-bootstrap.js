@@ -70,13 +70,49 @@ if (process.env.MCP_SERVER_CWD) {
     process.env.DAP_PROXY_WORKER = 'true';
     logBootstrapActivity('Setting DAP_PROXY_WORKER environment variable to indicate proxy mode.');
     
-    logBootstrapActivity('Attempting to dynamically import dap-proxy-entry.js...');
-    // dap-proxy-entry.js is expected to be in the same directory as this bootstrap script in the build output.
-    await import('./dap-proxy-entry.js'); 
-    logBootstrapActivity('Dynamic import of dap-proxy-entry.js appears to have succeeded.');
+    // Determine which proxy version to load
+    const bundlePath = path.join(__dirname, 'proxy-bundle.cjs');
+    const entryPath = path.join(__dirname, 'dap-proxy-entry.js');
+    
+    // Check if bundle exists and decide which version to use
+    const useBundle = (
+      process.env.NODE_ENV === 'production' || 
+      process.env.MCP_CONTAINER === 'true' ||
+      fs.existsSync(bundlePath)
+    );
+    
+    const proxyPath = useBundle ? bundlePath : entryPath;
+    logBootstrapActivity(`Using ${useBundle ? 'bundled' : 'unbundled'} proxy from: ${proxyPath}`);
+    
+    // Verify the chosen file exists
+    if (!fs.existsSync(proxyPath)) {
+      logBootstrapActivity(`ERROR: Proxy file not found at ${proxyPath}`);
+      if (useBundle) {
+        logBootstrapActivity('Bundle was expected but not found. Build may have failed.');
+      }
+      process.exit(1);
+    }
+    
+    // Convert to file URL for ESM import
+    // On Windows: file:///C:/path/to/file
+    // On Unix: file:///path/to/file
+    const normalizedPath = proxyPath.replace(/\\/g, '/');
+    const proxyUrl = normalizedPath.startsWith('/') 
+      ? `file://${normalizedPath}`  // Unix path already has leading slash
+      : `file:///${normalizedPath}`; // Windows path needs three slashes
+    logBootstrapActivity(`Importing proxy from URL: ${proxyUrl}`);
+    
+    try {
+      await import(proxyUrl);
+      logBootstrapActivity(`Dynamic import of ${useBundle ? 'bundled' : 'unbundled'} proxy succeeded.`);
+    } catch (importError) {
+      const errorMessage = importError instanceof Error ? `${importError.name}: ${importError.message}\n${importError.stack}` : String(importError);
+      logBootstrapActivity(`ERROR during dynamic import of proxy: ${errorMessage}`);
+      throw importError;
+    }
   } catch (e) {
     const errorMessage = e instanceof Error ? `${e.name}: ${e.message}\n${e.stack}` : String(e);
-    logBootstrapActivity(`ERROR during dynamic import or execution of dap-proxy.js: ${errorMessage}`);
+    logBootstrapActivity(`ERROR during proxy bootstrap: ${errorMessage}`);
     process.exit(1); 
   }
 })();

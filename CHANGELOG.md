@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2025-06-24
+
+### Added
+
+- **Dynamic Tool Documentation**: Tool descriptions now adapt to runtime environment (host vs container), helping LLMs understand path requirements without trial and error
+- **Structured JSON Logging**: All debugging operations emit structured JSON logs for visualization and monitoring
+  - Tool invocations with sanitized parameters
+  - Debug state changes (paused/running/stopped)
+  - Breakpoint lifecycle events
+  - Variable inspections with truncated values
+- **Comprehensive Smoke Tests**: Added SSE and container transport smoke tests to complement existing stdio tests
+  - Tests for all transport mechanisms (stdio, SSE, containerized)
+  - Cross-platform volume mounting verification
+  - Smart Docker image caching for faster tests
+- **Path Translation System**: Improved dependency injection for container/host path flexibility
+- **Test Utilities**: Enhanced test helpers for smoke tests including Docker utilities
+
+### Changed
+
+- **Docker Image Optimization**: Reduced image size by 64% (670MB → 240MB), improving deployment size and container startup time
+  - Switched to Alpine Linux base image
+  - Implemented esbuild bundling for JavaScript dependencies
+  - Optimized multi-stage build process
+- **Container Proxy Bundling**: Fixed proxy dependency issues in Alpine environments
+- **Parameter Validation**: Improved validation with proper MCP error responses
+- **Error Messages**: Enhanced error messages with clearer context for debugging
+
+### Fixed
+
+- Container proxy dependency resolution in Alpine Linux environments
+- Test mocking issues in dynamic tool documentation
+- Path handling edge cases in container mode
+- Various test stability improvements
+
 ## [0.9.0] - 2025-01-09
 
 ### Breaking Changes

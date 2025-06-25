@@ -3,7 +3,6 @@
  */
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-// import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"; // Unused
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema,
@@ -16,15 +15,14 @@ import { createProductionDependencies } from './container/dependencies.js';
 import { ContainerConfig } from './container/types.js';
 import { 
     DebugSessionInfo, 
-    // SessionState, // Unused
     Variable, 
     StackFrame, 
-    // DebugSession, // Unused
-    DebugLanguage 
+    DebugLanguage,
+    Breakpoint 
 } from './session/models.js';
-import { DebugProtocol } from '@vscode/debugprotocol'; // Import DebugProtocol
+import { DebugProtocol } from '@vscode/debugprotocol';
 import path from 'path';
-// import crypto from 'node:crypto'; // Unused
+import { PathTranslator } from './utils/path-translator.js';
 
 /**
  * Configuration options for the Debug MCP Server
@@ -32,32 +30,149 @@ import path from 'path';
 export interface DebugMcpServerOptions {
   logLevel?: string;
   logFile?: string;
-  // httpPort is removed; CLI will handle transport choice
+  pathTranslator?: PathTranslator;
+}
+
+/**
+ * Tool arguments interface
+ */
+interface ToolArguments {
+  sessionId?: string;
+  language?: string;
+  name?: string;
+  pythonPath?: string;
+  file?: string;
+  line?: number;
+  condition?: string;
+  scriptPath?: string;
+  args?: string[];
+  dapLaunchArgs?: Partial<DebugProtocol.LaunchRequestArguments>;
+  dryRunSpawn?: boolean;
+  scope?: number;
+  frameId?: number;
+  expression?: string;
+  linesContext?: number;
 }
 
 /**
  * Main Debug MCP Server class
  */
 export class DebugMcpServer {
-  public server: Server; // Made public
+  public server: Server;
   private sessionManager: SessionManager;
   private logger;
-  private constructorOptions: DebugMcpServerOptions; // To store constructor options
+  private constructorOptions: DebugMcpServerOptions;
+  private pathTranslator: PathTranslator;
+
+  // Public methods to expose SessionManager functionality for testing/external use
+  public async createDebugSession(params: { language: DebugLanguage; name?: string; pythonPath?: string; }): Promise<DebugSessionInfo> {
+    if (params.language !== 'python') { 
+      throw new McpError(McpErrorCode.InvalidParams, "language parameter must be 'python'");
+    }
+    const name = params.name || `Debug-${Date.now()}`;
+    try {
+      const sessionInfo: DebugSessionInfo = await this.sessionManager.createSession({
+        language: params.language as DebugLanguage,
+        name: name,
+        pythonPath: params.pythonPath 
+      });
+      return sessionInfo;
+    } catch (error) {
+      const errorMessage = (error as Error).message || String(error);
+      this.logger.error('Failed to create debug session', { error: errorMessage, stack: (error as Error).stack });
+      throw new McpError(McpErrorCode.InternalError, `Failed to create debug session: ${errorMessage}`);
+    }
+  }
+
+  public async startDebugging(
+    sessionId: string, 
+    scriptPath: string, 
+    args?: string[], 
+    dapLaunchArgs?: Partial<DebugProtocol.LaunchRequestArguments>, 
+    dryRunSpawn?: boolean
+  ): Promise<{ success: boolean; state: string; error?: string; data?: unknown; }> {
+    const translatedScriptPath = this.pathTranslator.translatePath(scriptPath);
+    this.logger.info(`[DebugMcpServer.startDebugging] Original scriptPath: ${scriptPath}, Translated scriptPath: ${translatedScriptPath}`);
+    const result = await this.sessionManager.startDebugging(
+      sessionId, 
+      translatedScriptPath, 
+      args, 
+      dapLaunchArgs, 
+      dryRunSpawn
+    );
+    return result;
+  }
+
+  public async closeDebugSession(sessionId: string): Promise<boolean> {
+    return this.sessionManager.closeSession(sessionId);
+  }
+
+  public async setBreakpoint(sessionId: string, file: string, line: number, condition?: string): Promise<Breakpoint> {
+    const translatedFile = this.pathTranslator.translatePath(file);
+    this.logger.info(`[DebugMcpServer.setBreakpoint] Original file: ${file}, Translated file: ${translatedFile}`);
+    return this.sessionManager.setBreakpoint(sessionId, translatedFile, line, condition);
+  }
+
+  public async getVariables(sessionId: string, variablesReference: number): Promise<Variable[]> {
+    return this.sessionManager.getVariables(sessionId, variablesReference);
+  }
+
+  public async getStackTrace(sessionId: string): Promise<StackFrame[]> {
+    const session = this.sessionManager.getSession(sessionId);
+    const currentThreadId = session?.proxyManager?.getCurrentThreadId();
+    if (!session || !session.proxyManager || !currentThreadId) {
+        throw new McpError(McpErrorCode.InvalidRequest, "Cannot get stack trace: no active proxy, thread, or session not found/paused.");
+    }
+    return this.sessionManager.getStackTrace(sessionId, currentThreadId);
+  }
+
+  public async getScopes(sessionId: string, frameId: number): Promise<DebugProtocol.Scope[]> {
+    return this.sessionManager.getScopes(sessionId, frameId);
+  }
+
+  public async continueExecution(sessionId: string): Promise<boolean> {
+    const result = await this.sessionManager.continue(sessionId);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to continue execution');
+    }
+    return true;
+  }
+
+  public async stepOver(sessionId: string): Promise<boolean> {
+    const result = await this.sessionManager.stepOver(sessionId);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to step over');
+    }
+    return true;
+  }
+
+  public async stepInto(sessionId: string): Promise<boolean> {
+    const result = await this.sessionManager.stepInto(sessionId);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to step into');
+    }
+    return true;
+  }
+
+  public async stepOut(sessionId: string): Promise<boolean> {
+    const result = await this.sessionManager.stepOut(sessionId);
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to step out');
+    }
+    return true;
+  }
 
   constructor(options: DebugMcpServerOptions = {}) {
-    this.constructorOptions = options; // Store options
+    this.constructorOptions = options;
     
-    // Create container configuration from options
     const containerConfig: ContainerConfig = {
       logLevel: options.logLevel,
       logFile: options.logFile,
       sessionLogDirBase: options.logFile ? path.dirname(options.logFile) + '/sessions' : undefined
     };
     
-    // Create all dependencies
     const dependencies = createProductionDependencies(containerConfig);
     
-    // Use the logger from dependencies
     this.logger = dependencies.logger;
     this.logger.info('[DebugMcpServer Constructor] Main server logger instance assigned.');
 
@@ -66,12 +181,12 @@ export class DebugMcpServer {
       { capabilities: { tools: {} } }
     );
 
-    // Create SessionManager with modern constructor
     const sessionManagerConfig: SessionManagerConfig = {
       logDirBase: containerConfig.sessionLogDirBase
     };
     
     this.sessionManager = new SessionManager(sessionManagerConfig, dependencies);
+    this.pathTranslator = options.pathTranslator || new PathTranslator(dependencies.fileSystem, dependencies.logger, dependencies.environment); // Pass fileSystem, logger, and environment
 
     this.registerTools();
     this.server.onerror = (error) => {
@@ -79,28 +194,73 @@ export class DebugMcpServer {
     };
   }
 
+  /**
+   * Sanitize request data for logging (remove sensitive information)
+   */
+  private sanitizeRequest(args: Record<string, unknown>): Record<string, unknown> {
+    const sanitized = { ...args };
+    // Remove absolute paths from pythonPath
+    if (sanitized.pythonPath && typeof sanitized.pythonPath === 'string' && path.isAbsolute(sanitized.pythonPath)) {
+      sanitized.pythonPath = '<absolute-path>';
+    }
+    // Truncate long arrays
+    if (sanitized.args && Array.isArray(sanitized.args) && sanitized.args.length > 5) {
+      sanitized.args = [...sanitized.args.slice(0, 5), `... +${sanitized.args.length - 5} more`];
+    }
+    return sanitized;
+  }
+
+  /**
+   * Get session name for logging
+   */
+  private getSessionName(sessionId: string): string {
+    try {
+      const session = this.sessionManager.getSession(sessionId);
+      return session?.name || 'Unknown Session';
+    } catch {
+      return 'Unknown Session';
+    }
+  }
+
+  private getPathDescription(parameterName: string): string {
+    const isContainer = this.pathTranslator.isContainerMode();
+    // Get workspace root from PathTranslator to respect dependency injection
+    const cwd = this.pathTranslator.getWorkspaceRoot();
+    
+    if (isContainer) {
+      return `Path to the ${parameterName} (relative to /workspace mount point). Example: 'src/main.py'`;
+    } else {
+      const examplePath = path.join(cwd, 'src', 'main.py').replace(/\\/g, '/');
+      return `Path to the ${parameterName} (absolute or relative to server's working directory: ${cwd}). Examples: 'src/main.py' or '${examplePath}'`;
+    }
+  }
+
   private registerTools(): void {
     this.server.setRequestHandler(ListToolsRequestSchema, async () => {
       this.logger.debug('Handling ListToolsRequest');
+      
+      // Generate dynamic descriptions for path parameters
+      const fileDescription = this.getPathDescription('source file');
+      const scriptPathDescription = this.getPathDescription('script');
+      
       return {
         tools: [
           { name: 'create_debug_session', description: 'Create a new debugging session', inputSchema: { type: 'object', properties: { language: { type: 'string', enum: ['python'] }, name: { type: 'string' }, pythonPath: {type: 'string'}, host: {type: 'string'}, port: {type: 'number'} }, required: ['language'] } },
           { name: 'list_debug_sessions', description: 'List all active debugging sessions', inputSchema: { type: 'object', properties: {} } },
-          { name: 'set_breakpoint', description: 'Set a breakpoint. Setting breakpoints on non-executable lines (structural, declarative) may lead to unexpected behavior', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, file: { type: 'string', description: 'Path to the source file (absolute or relative to project root)' }, line: { type: 'number', description: 'Line number where to set breakpoint. Executable statements (assignments, function calls, conditionals, returns) work best. Structural lines (function/class definitions), declarative lines (imports), or non-executable lines (comments, blank lines) may cause unexpected stepping behavior' }, condition: { type: 'string' } }, required: ['sessionId', 'file', 'line'] } },
+          { name: 'set_breakpoint', description: 'Set a breakpoint. Setting breakpoints on non-executable lines (structural, declarative) may lead to unexpected behavior', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, file: { type: 'string', description: fileDescription }, line: { type: 'number', description: 'Line number where to set breakpoint. Executable statements (assignments, function calls, conditionals, returns) work best. Structural lines (function/class definitions), declarative lines (imports), or non-executable lines (comments, blank lines) may cause unexpected stepping behavior' }, condition: { type: 'string' } }, required: ['sessionId', 'file', 'line'] } },
           { name: 'start_debugging', description: 'Start debugging a script', inputSchema: { 
               type: 'object', 
               properties: { 
                 sessionId: { type: 'string' }, 
-                scriptPath: { type: 'string' }, 
+                scriptPath: { type: 'string', description: scriptPathDescription }, 
                 args: { type: 'array', items: { type: 'string' } }, 
                 dapLaunchArgs: { 
                   type: 'object', 
                   properties: { 
                     stopOnEntry: { type: 'boolean' },
                     justMyCode: { type: 'boolean' } 
-                    // Add other DAP launch args here if needed by schema
                   },
-                  additionalProperties: true // Allow other DAP args
+                  additionalProperties: true
                 },
                 dryRunSpawn: { type: 'boolean' } 
               }, 
@@ -117,78 +277,228 @@ export class DebugMcpServer {
           { name: 'get_stack_trace', description: 'Get stack trace', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' } }, required: ['sessionId'] } },
           { name: 'get_scopes', description: 'Get scopes for a stack frame', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, frameId: { type: 'number', description: "The ID of the stack frame from a stackTrace response" } }, required: ['sessionId', 'frameId'] } },
           { name: 'evaluate_expression', description: 'Evaluate expression (Not Implemented)', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, expression: { type: 'string' } }, required: ['sessionId', 'expression'] } },
-          { name: 'get_source_context', description: 'Get source context (Not Implemented)', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, file: { type: 'string' }, line: { type: 'number' }, linesContext: { type: 'number' } }, required: ['sessionId', 'file', 'line'] } },
+          { name: 'get_source_context', description: 'Get source context (Not Implemented)', inputSchema: { type: 'object', properties: { sessionId: { type: 'string' }, file: { type: 'string', description: fileDescription }, line: { type: 'number' }, linesContext: { type: 'number' } }, required: ['sessionId', 'file', 'line'] } },
         ],
       };
     });
 
     this.server.setRequestHandler(
       CallToolRequestSchema,
-      async (request): Promise<ServerResult> => { // Removed _extra
+      async (request): Promise<ServerResult> => {
         const toolName = request.params.name;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const args = request.params.arguments as any; 
+        const args = request.params.arguments as ToolArguments; 
 
-        this.logger.debug(`Handling tool call: ${toolName}`, { args });
+        // Log tool call with structured logging
+        this.logger.info('tool:call', {
+          tool: toolName,
+          sessionId: args.sessionId,
+          sessionName: args.sessionId ? this.getSessionName(args.sessionId) : undefined,
+          request: this.sanitizeRequest(args as Record<string, unknown>),
+          timestamp: Date.now()
+        });
 
         try {
+          let result: ServerResult;
+          
           switch (toolName) {
-            case 'create_debug_session': return this.handleCreateDebugSession(args);
-            case 'list_debug_sessions': return this.handleListDebugSessions();
-            case 'set_breakpoint': return this.handleSetBreakpoint(args);
-            case 'start_debugging': return this.handleStartDebugging(args);
-            case 'close_debug_session': return this.handleCloseDebugSession(args);
-            case 'step_over': return this.handleStepOver(args);
-            case 'step_into': return this.handleStepInto(args);
-            case 'step_out': return this.handleStepOut(args);
-            case 'continue_execution': return this.handleContinue(args);
-            case 'pause_execution': return this.handlePause(args);
-            case 'get_variables': return this.handleGetVariables(args);
-            case 'get_stack_trace': return this.handleGetStackTrace(args);
-            case 'get_scopes': return this.handleGetScopes(args);
-            case 'evaluate_expression': return this.handleEvaluateExpression(args);
-            case 'get_source_context': return this.handleGetSourceContext(args);
+            case 'create_debug_session': {
+              const sessionInfo = await this.createDebugSession({
+                language: (args.language || 'python') as DebugLanguage,
+                name: args.name,
+                pythonPath: args.pythonPath
+              });
+              
+              // Log session creation
+              this.logger.info('session:created', {
+                sessionId: sessionInfo.id,
+                sessionName: sessionInfo.name,
+                language: sessionInfo.language,
+                pythonPath: args.pythonPath,
+                timestamp: Date.now()
+              });
+              
+              result = { content: [{ type: 'text', text: JSON.stringify({ success: true, sessionId: sessionInfo.id, message: `Created ${sessionInfo.language} debug session: ${sessionInfo.name}` }) }] };
+              break;
+            }
+            case 'list_debug_sessions': {
+              result = await this.handleListDebugSessions();
+              break;
+            }
+            case 'set_breakpoint': {
+              if (!args.sessionId || !args.file || args.line === undefined) {
+                throw new McpError(McpErrorCode.InvalidParams, 'Missing required parameters');
+              }
+              const breakpoint = await this.setBreakpoint(args.sessionId, args.file, args.line, args.condition);
+              
+              // Log breakpoint event
+              this.logger.info('debug:breakpoint', {
+                event: 'set',
+                sessionId: args.sessionId,
+                sessionName: this.getSessionName(args.sessionId),
+                breakpointId: breakpoint.id,
+                file: breakpoint.file,
+                line: breakpoint.line,
+                verified: breakpoint.verified,
+                timestamp: Date.now()
+              });
+              
+              result = { content: [{ type: 'text', text: JSON.stringify({ success: true, breakpointId: breakpoint.id, file: breakpoint.file, line: breakpoint.line, verified: breakpoint.verified, message: `Breakpoint set at ${breakpoint.file}:${breakpoint.line}` }) }] };
+              break;
+            }
+            case 'start_debugging': {
+              if (!args.sessionId || !args.scriptPath) {
+                throw new McpError(McpErrorCode.InvalidParams, 'Missing required parameters');
+              }
+              const debugResult = await this.startDebugging(args.sessionId, args.scriptPath, args.args, args.dapLaunchArgs, args.dryRunSpawn);
+              const responsePayload: Record<string, unknown> = {
+                success: debugResult.success,
+                state: debugResult.state,
+                message: debugResult.error ? debugResult.error : (debugResult.data as Record<string, unknown>)?.message || `Operation status for ${args.scriptPath}`,
+              };
+              if (debugResult.data) {
+                responsePayload.data = debugResult.data;
+              }
+              result = { content: [{ type: 'text', text: JSON.stringify(responsePayload) }] };
+              break;
+            }
+            case 'close_debug_session': {
+              if (!args.sessionId) {
+                throw new McpError(McpErrorCode.InvalidParams, 'Missing required sessionId');
+              }
+              
+              const sessionName = this.getSessionName(args.sessionId);
+              const sessionCreatedAt = Date.now(); // In real implementation, would track creation time
+              const closed = await this.closeDebugSession(args.sessionId);
+              
+              if (closed) {
+                // Log session closure
+                this.logger.info('session:closed', {
+                  sessionId: args.sessionId,
+                  sessionName: sessionName,
+                  duration: Date.now() - sessionCreatedAt,
+                  timestamp: Date.now()
+                });
+              }
+              
+              result = { content: [{ type: 'text', text: JSON.stringify({ success: closed, message: closed ? `Closed debug session: ${args.sessionId}` : `Failed to close debug session: ${args.sessionId}` }) }] };
+              break;
+            }
+            case 'step_over':
+            case 'step_into':
+            case 'step_out': {
+              if (!args.sessionId) {
+                throw new McpError(McpErrorCode.InvalidParams, 'Missing required sessionId');
+              }
+              let stepResult: boolean;
+              if (toolName === 'step_over') {
+                stepResult = await this.stepOver(args.sessionId);
+              } else if (toolName === 'step_into') {
+                stepResult = await this.stepInto(args.sessionId);
+              } else {
+                stepResult = await this.stepOut(args.sessionId);
+              }
+              result = { content: [{ type: 'text', text: JSON.stringify({ success: stepResult, message: stepResult ? `Stepped ${toolName.replace('step_', '')}` : `Failed to ${toolName.replace('_', ' ')}` }) }] };
+              break;
+            }
+            case 'continue_execution': {
+              if (!args.sessionId) {
+                throw new McpError(McpErrorCode.InvalidParams, 'Missing required sessionId');
+              }
+              const continueResult = await this.continueExecution(args.sessionId);
+              result = { content: [{ type: 'text', text: JSON.stringify({ success: continueResult, message: continueResult ? 'Continued execution' : 'Failed to continue execution' }) }] };
+              break;
+            }
+            case 'pause_execution': {
+              result = await this.handlePause(args as { sessionId: string });
+              break;
+            }
+            case 'get_variables': {
+              if (!args.sessionId || args.scope === undefined) {
+                throw new McpError(McpErrorCode.InvalidParams, 'Missing required parameters');
+              }
+              const variables = await this.getVariables(args.sessionId, args.scope);
+              
+              // Log variable inspection (truncate large values)
+              const truncatedVars = variables.map(v => ({
+                name: v.name,
+                type: v.type,
+                value: v.value.length > 200 ? v.value.substring(0, 200) + '... (truncated)' : v.value
+              }));
+              
+              this.logger.info('debug:variables', {
+                sessionId: args.sessionId,
+                sessionName: this.getSessionName(args.sessionId),
+                variablesReference: args.scope,
+                variableCount: variables.length,
+                variables: truncatedVars.slice(0, 10), // Log first 10 variables
+                timestamp: Date.now()
+              });
+              
+              result = { content: [{ type: 'text', text: JSON.stringify({ success: true, variables, count: variables.length, variablesReference: args.scope }) }] };
+              break;
+            }
+            case 'get_stack_trace': {
+              if (!args.sessionId) {
+                throw new McpError(McpErrorCode.InvalidParams, 'Missing required sessionId');
+              }
+              const stackFrames = await this.getStackTrace(args.sessionId);
+              result = { content: [{ type: 'text', text: JSON.stringify({ success: true, stackFrames, count: stackFrames.length }) }] };
+              break;
+            }
+            case 'get_scopes': {
+              if (!args.sessionId || args.frameId === undefined) {
+                throw new McpError(McpErrorCode.InvalidParams, 'Missing required parameters');
+              }
+              const scopes = await this.getScopes(args.sessionId, args.frameId);
+              result = { content: [{ type: 'text', text: JSON.stringify({ success: true, scopes }) }] };
+              break;
+            }
+            case 'evaluate_expression': {
+              result = await this.handleEvaluateExpression(args as { sessionId: string; expression: string });
+              break;
+            }
+            case 'get_source_context': {
+              result = await this.handleGetSourceContext(args as { sessionId: string; file: string; line: number; linesContext?: number });
+              break;
+            }
             default:
               throw new McpError(McpErrorCode.MethodNotFound, `Unknown tool: ${toolName}`);
           }
+          
+          // Log successful tool response
+          this.logger.info('tool:response', {
+            tool: toolName,
+            sessionId: args.sessionId,
+            sessionName: args.sessionId ? this.getSessionName(args.sessionId) : undefined,
+            success: true,
+            timestamp: Date.now()
+          });
+          
+          return result;
         } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          
+          // Log tool error
+          this.logger.error('tool:error', {
+            tool: toolName,
+            sessionId: args.sessionId,
+            sessionName: args.sessionId ? this.getSessionName(args.sessionId) : undefined,
+            error: errorMessage,
+            timestamp: Date.now()
+          });
+          
           if (error instanceof McpError) throw error;
-          this.logger.error(`Error handling tool call: ${toolName}`, { error });
-          throw new McpError(McpErrorCode.InternalError, `Failed to execute tool ${toolName}: ${(error as Error).message}`);
+          throw new McpError(McpErrorCode.InternalError, `Failed to execute tool ${toolName}: ${errorMessage}`);
         }
       }
     );
-  }
-
-  private async handleCreateDebugSession(args: { language: string, name?: string, pythonPath?: string /* host and port are unused here */ }): Promise<ServerResult> {
-    if (args.language !== 'python') { 
-        throw new McpError(McpErrorCode.InvalidParams, "language parameter must be 'python'");
-    }
-    // const debuggerConfig = { pythonPath: args.pythonPath, host: args.host, port: args.port }; // Unused
-    const name = args.name || `Debug-${Date.now()}`;
-    try {
-      // Updated call to match new signature of sessionManager.createSession
-      const sessionInfo: DebugSessionInfo = await this.sessionManager.createSession({
-        language: args.language as DebugLanguage, // Already validated as 'python'
-        name: name,
-        pythonPath: args.pythonPath 
-        // Note: args.host and args.port are not directly passed to the new createSession signature.
-        // If they are needed, SessionManager.createSession would need to be adjusted.
-      });
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, sessionId: sessionInfo.id, message: `Created ${args.language} debug session: ${name}` }) }] };
-    } catch (error) {
-      const errorMessage = (error as Error).message || String(error);
-      this.logger.error('Failed to create debug session', { error: errorMessage, stack: (error as Error).stack });
-      throw new McpError(McpErrorCode.InternalError, `Failed to create debug session: ${errorMessage}`);
-    }
   }
 
   private async handleListDebugSessions(): Promise<ServerResult> {
     try {
       const sessionsInfo: DebugSessionInfo[] = this.sessionManager.getAllSessions();
       const sessionData = sessionsInfo.map((session: DebugSessionInfo) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const mappedSession: any = { 
+        const mappedSession: Record<string, unknown> = { 
             id: session.id, 
             name: session.name, 
             language: session.language as DebugLanguage, 
@@ -207,102 +517,9 @@ export class DebugMcpServer {
     }
   }
 
-  private async handleSetBreakpoint(args: { sessionId: string, file: string, line: number, condition?: string }): Promise<ServerResult> {
+  private async handlePause(args: { sessionId: string }): Promise<ServerResult> {
     try {
-      const breakpoint = await this.sessionManager.setBreakpoint(args.sessionId, args.file, args.line, args.condition);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, breakpointId: breakpoint.id, file: breakpoint.file, line: breakpoint.line, verified: breakpoint.verified, message: `Breakpoint set at ${breakpoint.file}:${breakpoint.line}` }) }] };
-    } catch (error) {
-      this.logger.error('Failed to set breakpoint', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to set breakpoint: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleStartDebugging(payload: { 
-    sessionId: string, 
-    scriptPath: string, 
-    args?: string[], 
-    dapLaunchArgs?: Partial<DebugProtocol.LaunchRequestArguments>, // Allow dapLaunchArgs
-    dryRunSpawn?: boolean 
-  }): Promise<ServerResult> {
-    try {
-      const result = await this.sessionManager.startDebugging(
-        payload.sessionId, 
-        payload.scriptPath, 
-        payload.args, 
-        payload.dapLaunchArgs, // Pass dapLaunchArgs
-        payload.dryRunSpawn
-      );
-      // Ensure the 'data' field from SessionManager's result is passed through, especially for dryRun
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const responsePayload: any = {
-        success: result.success,
-        state: result.state,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        message: result.error ? result.error : (result.data as any)?.message || `Operation status for ${payload.scriptPath}`,
-      };
-      if (result.data) {
-        responsePayload.data = result.data;
-      }
-      return { content: [{ type: 'text', text: JSON.stringify(responsePayload) }] };
-    } catch (error) {
-      this.logger.error('Failed to start debugging', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to start debugging: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleCloseDebugSession(args: { sessionId: string }): Promise<ServerResult> {
-    try {
-      const closed = await this.sessionManager.closeSession(args.sessionId);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: closed, message: closed ? `Closed debug session: ${args.sessionId}` : `Failed to close debug session: ${args.sessionId}` }) }] };
-    } catch (error) {
-      this.logger.error('Failed to close debug session', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to close debug session: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleStepOver(args: { sessionId: string }): Promise<ServerResult> {
-    try {
-      const result = await this.sessionManager.stepOver(args.sessionId);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: result.success, state: result.state, message: result.success ? 'Stepped over' : result.error }) }] };
-    } catch (error) {
-      this.logger.error('Failed to step over', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to step over: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleStepInto(args: { sessionId: string }): Promise<ServerResult> {
-    try {
-      const result = await this.sessionManager.stepInto(args.sessionId);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: result.success, state: result.state, message: result.success ? 'Stepped into' : result.error }) }] };
-    } catch (error) {
-      this.logger.error('Failed to step into', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to step into: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleStepOut(args: { sessionId: string }): Promise<ServerResult> {
-    try {
-      const result = await this.sessionManager.stepOut(args.sessionId);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: result.success, state: result.state, message: result.success ? 'Stepped out' : result.error }) }] };
-    } catch (error) {
-      this.logger.error('Failed to step out', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to step out: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleContinue(args: { sessionId: string }): Promise<ServerResult> {
-    try {
-      const result = await this.sessionManager.continue(args.sessionId);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: result.success, state: result.state, message: result.success ? 'Continued execution' : result.error }) }] };
-    } catch (error) {
-      this.logger.error('Failed to continue execution', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to continue execution: ${(error as Error).message}`);
-    }
-  }
-
-  private async handlePause(args: { sessionId: string }): Promise<ServerResult> { // Parameter changed back, will be used or removed
-    try {
-      this.logger.info(`Pause requested for session: ${args.sessionId}`); // Use the arg
+      this.logger.info(`Pause requested for session: ${args.sessionId}`);
       throw new McpError(McpErrorCode.InternalError, "Pause execution not yet implemented with proxy.");
     } catch (error) {
       this.logger.error('Failed to pause execution', { error });
@@ -311,49 +528,9 @@ export class DebugMcpServer {
     }
   }
 
-  private async handleGetVariables(args: { sessionId: string, scope?: number }): Promise<ServerResult> { 
-    if (args.scope === undefined || typeof args.scope !== 'number') {
-      throw new McpError(McpErrorCode.InvalidParams, 'scope (variablesReference) parameter is required and must be a number.');
-    }
+  private async handleEvaluateExpression(args: { sessionId: string, expression: string }): Promise<ServerResult> {
     try {
-      const variables: Variable[] = await this.sessionManager.getVariables(args.sessionId, args.scope);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, variables, count: variables.length, variablesReference: args.scope }) }] };
-    } catch (error) {
-      this.logger.error('Failed to get variables', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to get variables: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleGetStackTrace(args: { sessionId: string }): Promise<ServerResult> {
-    try {
-      const session = this.sessionManager.getSession(args.sessionId);
-      // Get current thread ID from ProxyManager
-      const currentThreadId = session?.proxyManager?.getCurrentThreadId();
-      if (!session || !session.proxyManager || !currentThreadId) {
-          throw new McpError(McpErrorCode.InvalidRequest, "Cannot get stack trace: no active proxy, thread, or session not found/paused.");
-      }
-      const stackFrames: StackFrame[] = await this.sessionManager.getStackTrace(args.sessionId, currentThreadId);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, stackFrames, count: stackFrames.length }) }] };
-    } catch (error) {
-      this.logger.error('Failed to get stack trace', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to get stack trace: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleGetScopes(args: { sessionId: string, frameId: number }): Promise<ServerResult> {
-    try {
-      // Type for scopes from DebugProtocol needs to be imported in SessionManager if not already
-      const scopes = await this.sessionManager.getScopes(args.sessionId, args.frameId);
-      return { content: [{ type: 'text', text: JSON.stringify({ success: true, scopes }) }] };
-    } catch (error) {
-      this.logger.error('Failed to get scopes', { error });
-      throw new McpError(McpErrorCode.InternalError, `Failed to get scopes: ${(error as Error).message}`);
-    }
-  }
-
-  private async handleEvaluateExpression(args: { sessionId: string, expression: string }): Promise<ServerResult> { // Parameter changed back
-    try {
-      this.logger.info(`Evaluate requested for session: ${args.sessionId}, expression: ${args.expression}`); // Use the args
+      this.logger.info(`Evaluate requested for session: ${args.sessionId}, expression: ${args.expression}`);
       throw new McpError(McpErrorCode.InternalError, "Evaluate expression not yet implemented with proxy.");
     } catch (error) {
       this.logger.error('Failed to evaluate expression', { error });
@@ -376,10 +553,9 @@ export class DebugMcpServer {
     }
   }
 
-  async start(): Promise<void> { // This method is now only for Stdio mode by convention
+  async start(): Promise<void> {
     this.logger.info('Starting Debug MCP Server (for StdioTransport)');
     try {
-      // This method is now implicitly for Stdio. HTTP setup is done in src/index.ts.
       const transport = new StdioServerTransport();
       await this.server.connect(transport);
       this.logger.info('Server connected to stdio transport');

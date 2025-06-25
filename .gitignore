@@ -41,6 +41,7 @@ coverage/
 # Temporary files
 tmp/
 temp/
+-p/
 
 # Python cache
 __pycache__/
@@ -64,3 +65,11 @@ coverage-analysis-details.json
 
 # Manual tests (may be outdated)
 tests/manual/
+
+# Root-level temporary files (prevent future clutter)
+/test-*
+/test_*.py
+/*_REPORT.md
+/*_SUMMARY.md
+/*_ANALYSIS.md
+/integration_test_*.log

@@ -60,7 +60,7 @@ export default [
         ...globals.node, // Tests also run in Node
       },
       parserOptions: {
-        project: ["./tsconfig.json"], // Or a specific tsconfig for tests if you have one
+        project: ["./tsconfig.spec.json"], // Use tsconfig.spec.json for test files
         // tsconfigRootDir: import.meta.dirname,
       },
     },

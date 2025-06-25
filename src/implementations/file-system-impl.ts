@@ -60,6 +60,10 @@ export class FileSystemImpl implements IFileSystem {
     return fs.pathExists(path);
   }
 
+  existsSync(path: string): boolean {
+    return fs.existsSync(path);
+  }
+
   async remove(path: string): Promise<void> {
     return fs.remove(path);
   }

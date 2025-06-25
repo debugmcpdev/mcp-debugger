@@ -19,12 +19,7 @@ import { existsSync as nativeNodeExistsSync } from 'node:fs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 import { ServerResult } from '@modelcontextprotocol/sdk/types.js';
-import { findPythonExecutable } from '../../src/utils/python-utils.js';
-
-// Mock the python-utils module
-vi.mock('../../src/utils/python-utils.js', () => ({
-  findPythonExecutable: vi.fn()
-}));
+// No mocking of python-utils - E2E tests should use real Python discovery
 
 const exec = promisify(execCallback);
 const TEST_TIMEOUT = 60000;
@@ -164,9 +159,6 @@ async function startMcpServer(): Promise<ChildProcess> {
 describe('MCP Server connecting to debugpy', () => {
   beforeAll(async () => {
     try {
-      // Configure the mock for the test environment
-      vi.mocked(findPythonExecutable).mockResolvedValue(process.platform === 'win32' ? 'python' : 'python3');
-      
       debugpyProcess = await startDebugpyServer();
       mcpProcess = await startMcpServer(); 
 

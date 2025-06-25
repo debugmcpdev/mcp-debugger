@@ -9,7 +9,8 @@ import {
   IProcessManager, 
   INetworkManager, 
   ILogger,
-  IProxyManagerFactory
+  IProxyManagerFactory,
+  IEnvironment
 } from '../interfaces/external-dependencies.js';
 import { 
   IProcessLauncher, 
@@ -24,6 +25,7 @@ import {
   ProxyProcessLauncherImpl,
   DebugTargetLauncherImpl 
 } from '../implementations/index.js';
+import { ProcessEnvironment } from '../implementations/environment-impl.js';
 import { ISessionStoreFactory } from '../factories/session-store-factory.js';
 import { SessionStoreFactory } from '../factories/session-store-factory.js';
 import { ProxyManagerFactory } from '../factories/proxy-manager-factory.js';
@@ -37,6 +39,7 @@ export interface Dependencies {
   processManager: IProcessManager;
   networkManager: INetworkManager;
   logger: ILogger;
+  environment: IEnvironment;
   
   // Process launchers
   processLauncher: IProcessLauncher;
@@ -62,6 +65,7 @@ export function createProductionDependencies(config: ContainerConfig = {}): Depe
   });
   
   // Create base implementations
+  const environment = new ProcessEnvironment();
   const fileSystem = new FileSystemImpl();
   const processManager = new ProcessManagerImpl();
   const networkManager = new NetworkManagerImpl();
@@ -85,6 +89,7 @@ export function createProductionDependencies(config: ContainerConfig = {}): Depe
     processManager,
     networkManager,
     logger,
+    environment,
     processLauncher,
     proxyProcessLauncher,
     debugTargetLauncher,

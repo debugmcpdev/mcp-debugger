@@ -132,6 +132,7 @@ export class ProxyManager extends EventEmitter implements IProxyManager {
   private isDryRun = false;
   private adapterConfigured = false;
   private dapState: DAPSessionState | null = null;
+  private stderrBuffer: string[] = [];
 
   constructor(
     private proxyProcessLauncher: IProxyProcessLauncher,
@@ -156,7 +157,10 @@ export class ProxyManager extends EventEmitter implements IProxyManager {
     const proxyScriptPath = await this.findProxyScript();
     
     // Prepare environment
-    const projectRootForEnv = path.resolve(fileURLToPath(import.meta.url), '../../../');
+    // In container environments, use /app as the working directory to avoid double slash issues
+    const projectRootForEnv = process.env.MCP_CONTAINER === 'true' 
+      ? '/app' 
+      : path.resolve(fileURLToPath(import.meta.url), '../../../');
     const env = { ...process.env, MCP_SERVER_CWD: projectRootForEnv };
 
     this.logger.info(`[ProxyManager] Spawning proxy for session ${config.sessionId}. Path: ${proxyScriptPath}`);
@@ -233,7 +237,11 @@ export class ProxyManager extends EventEmitter implements IProxyManager {
           // Normal exit for dry run
           resolve();
         } else {
-          reject(new Error(`Proxy exited during initialization. Code: ${code}, Signal: ${signal}`));
+          let errorMessage = `Proxy exited during initialization. Code: ${code}, Signal: ${signal}`;
+          if (this.stderrBuffer.length > 0) {
+            errorMessage += `\nStderr output:\n${this.stderrBuffer.join('\n')}`;
+          }
+          reject(new Error(errorMessage));
         }
       };
 
@@ -325,24 +333,36 @@ export class ProxyManager extends EventEmitter implements IProxyManager {
   }
 
   private async findProxyScript(): Promise<string> {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
+    // Check if we're running from a bundled environment
+    const isBundled = fileURLToPath(import.meta.url).includes('bundle.cjs');
     
-    // Try .js first (for src/dev)
-    let proxyWorkerPath = path.resolve(__dirname, '../proxy/proxy-bootstrap.js');
-    this.logger.info(`[ProxyManager] Trying proxy path: ${proxyWorkerPath}`);
-
-    if (!await this.fileSystem.pathExists(proxyWorkerPath)) {
-      // Fallback to .cjs (for dist)
-      proxyWorkerPath = path.resolve(__dirname, '../proxy/proxy-bootstrap.cjs');
-      this.logger.info(`[ProxyManager] Trying fallback path: ${proxyWorkerPath}`);
-      
-      if (!await this.fileSystem.pathExists(proxyWorkerPath)) {
-        throw new Error(`Bootstrap worker script not found. Tried .js and .cjs variants.`);
-      }
+    let distPath: string;
+    if (isBundled) {
+      // In bundled environment (e.g., Docker container), proxy-bootstrap.js is in same dist directory
+      distPath = path.resolve(process.cwd(), 'dist/proxy/proxy-bootstrap.js');
+    } else {
+      // In development/non-bundled environment, resolve relative to this module's location
+      const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+      distPath = path.resolve(moduleDir, '../../dist/proxy/proxy-bootstrap.js');
     }
-
-    return proxyWorkerPath;
+    
+    this.logger.info(`[ProxyManager] Checking for proxy script at: ${distPath} (bundled: ${isBundled})`);
+    
+    if (!(await this.fileSystem.pathExists(distPath))) {
+      const moduleDir = path.dirname(fileURLToPath(import.meta.url));
+      throw new Error(
+        `Bootstrap worker script not found at: ${distPath}\n` +
+        `Module directory: ${moduleDir}\n` +
+        `Current working directory: ${process.cwd()}\n` +
+        `Is bundled: ${isBundled}\n` +
+        `This usually means:\n` +
+        `  1. You need to run 'npm run build' first\n` +
+        `  2. The build failed to copy proxy files\n` +
+        `  3. The TypeScript compilation structure is unexpected`
+      );
+    }
+    
+    return distPath;
   }
 
   private sendCommand(command: object): void {
@@ -363,7 +383,12 @@ export class ProxyManager extends EventEmitter implements IProxyManager {
 
     // Handle stderr
     this.proxyProcess.stderr?.on('data', (data: Buffer | string) => {
-      this.logger.error(`[ProxyManager STDERR] ${data.toString().trim()}`);
+      const output = data.toString().trim();
+      this.logger.error(`[ProxyManager STDERR] ${output}`);
+      // Capture stderr for error reporting during initialization
+      if (!this.isInitialized) {
+        this.stderrBuffer.push(output);
+      }
     });
 
     // Handle exit

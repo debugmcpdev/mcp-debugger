@@ -1,0 +1,2 @@
+@echo off
+echo MCP_CONTAINER=%MCP_CONTAINER%

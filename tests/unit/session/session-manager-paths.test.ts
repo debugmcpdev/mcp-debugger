@@ -70,27 +70,26 @@ describe('SessionManager - Path Resolution', () => {
       expect(bp.file.toLowerCase()).toContain('file.py');
     });
 
-    it('should resolve relative paths correctly on Windows', async () => {
+    it('should pass through paths without modification', async () => {
       const session = await sessionManager.createSession({ 
         language: DebugLanguage.PYTHON 
       });
       
+      const testPath = 'test/file.py';
       const bp = await sessionManager.setBreakpoint(
         session.id,
-        'test/file.py',
+        testPath,
         30
       );
       
-      // Should be resolved to absolute path
-      expect(path.isAbsolute(bp.file)).toBe(true);
-      // Check path contains expected components
-      expect(bp.file.toLowerCase()).toContain('test');
-      expect(bp.file.toLowerCase()).toContain('file.py');
+      // SessionManager should pass through the path as-is
+      // Path resolution is now handled at the server level
+      expect(bp.file).toBe(testPath);
     });
   });
   
   describe('Breakpoint Path Resolution', () => {
-    it('should convert relative breakpoint paths to absolute', async () => {
+    it('should pass through relative paths without modification', async () => {
       const session = await sessionManager.createSession({ 
         language: DebugLanguage.PYTHON 
       });
@@ -98,9 +97,8 @@ describe('SessionManager - Path Resolution', () => {
       const relativePath = 'src/test.py';
       const bp = await sessionManager.setBreakpoint(session.id, relativePath, 42);
       
-      expect(path.isAbsolute(bp.file)).toBe(true);
-      expect(bp.file.toLowerCase()).toContain('src');
-      expect(bp.file.toLowerCase()).toContain('test.py');
+      // SessionManager no longer converts paths - just passes through
+      expect(bp.file).toBe(relativePath);
     });
 
     it('should handle already absolute breakpoint paths', async () => {
@@ -111,7 +109,8 @@ describe('SessionManager - Path Resolution', () => {
       const absolutePath = '/home/user/project/test.py';
       const bp = await sessionManager.setBreakpoint(session.id, absolutePath, 50);
       
-      expect(bp.file).toBe(path.normalize(absolutePath));
+      // SessionManager passes through paths without normalization
+      expect(bp.file).toBe(absolutePath);
     });
 
     it('should normalize paths across different OS', async () => {

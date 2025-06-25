@@ -37,13 +37,22 @@ export async function createTestSessionManager(
   mockSessionStoreFactory: MockSessionStoreFactory;
 }> {
   const baseDeps = await createTestDependencies();
+  
+  // Create a mock environment if not provided
+  const mockEnvironment = overrides.environment || {
+    get: vi.fn((key: string) => process.env[key]),
+    getAll: vi.fn(() => ({ ...process.env })),
+    getCurrentWorkingDirectory: vi.fn(() => process.cwd())
+  };
+  
   const deps: SessionManagerDependencies = {
     fileSystem: overrides.fileSystem || baseDeps.fileSystem,
     networkManager: overrides.networkManager || baseDeps.networkManager,
     logger: overrides.logger || baseDeps.logger,
     proxyManagerFactory: overrides.proxyManagerFactory || baseDeps.proxyManagerFactory,
     sessionStoreFactory: overrides.sessionStoreFactory || baseDeps.sessionStoreFactory,
-    debugTargetLauncher: overrides.debugTargetLauncher || baseDeps.debugTargetLauncher
+    debugTargetLauncher: overrides.debugTargetLauncher || baseDeps.debugTargetLauncher,
+    environment: mockEnvironment
   };
   
   const sessionManager = new SessionManager(config, deps);

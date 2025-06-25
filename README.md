@@ -1,5 +1,9 @@
 # mcp-debugger
 
+<div align="center">
+  <img src="assets/logo.png" alt="MCP Debugger Logo - A stylized circuit board with debug breakpoints" width="400" height="400">
+</div>
+
 **MCP server for step-through debugging – give your AI agents debugging superpowers** 🚀
 
 [![CI](https://github.com/debugmcp/mcp-debugger/actions/workflows/ci.yml/badge.svg)](https://github.com/debugmcp/mcp-debugger/actions/workflows/ci.yml)
@@ -11,6 +15,19 @@
 ## 🎯 Overview
 
 mcp-debugger is a Model Context Protocol (MCP) server that provides debugging tools as structured API calls. It enables AI agents to perform step-through debugging of Python scripts using the Debug Adapter Protocol (DAP).
+
+> 🎬 **Demo Video**: See the debugger in action!
+> 
+> *Recording in progress - This will show an AI agent discovering and fixing the variable swap bug in real-time*
+> 
+> <!-- To capture this demo, see examples/visualizer/demo_script.md -->
+> <!-- Uncomment when demo.gif is available:
+> <div align="center">
+>   <img src="assets/demo.gif" alt="MCP Debugger Demo - AI agent debugging Python code">
+>   <br>
+>   <em>AI agent discovering and fixing a variable swap bug in real-time</em>
+> </div>
+> -->
 
 ## ✨ Key Features
 
@@ -52,6 +69,16 @@ npm install -g mcp-debugger
 mcp-debugger --help
 ```
 
+> 📸 **Screenshot**: *MCP Integration in Action*
+> 
+> This screenshot will show real-time MCP protocol communication with tool calls and JSON responses flowing between the AI agent and debugger.
+> 
+> <!-- To capture this screenshot, see examples/visualizer/capture_guide.md -->
+> <!-- Uncomment when mcp-integration.png is available:
+> ![MCP Integration](assets/screenshots/mcp-integration.png)
+> *Real-time MCP protocol communication showing tool calls and responses*
+> -->
+
 ## 📚 How It Works
 
 mcp-debugger exposes debugging operations as MCP tools that can be called with structured JSON parameters:
@@ -70,6 +97,16 @@ mcp-debugger exposes debugging operations as MCP tools that can be called with s
   "message": "Created python debug session: My Debug Session"
 }
 ```
+
+> 📸 **Screenshot**: *Active Debugging Session*
+> 
+> This screenshot will show the debugger paused at a breakpoint with the stack trace visible in the left panel, local variables in the right panel, and source code with line highlighting in the center.
+> 
+> <!-- To capture this screenshot, see examples/visualizer/capture_guide.md -->
+> <!-- Uncomment when debugging-session.png is available:
+> ![Debugging Session](assets/screenshots/debugging-session.png)
+> *Active debugging session paused at a breakpoint with stack trace visible*
+> -->
 
 ## 🛠️ Available Tools
 
@@ -90,6 +127,16 @@ mcp-debugger exposes debugging operations as MCP tools that can be called with s
 | `pause_execution` | Pause running execution | ❌ Not Implemented |
 | `evaluate_expression` | Evaluate expressions | ❌ Not Implemented |
 | `get_source_context` | Get source code context | ❌ Not Implemented |
+
+> 📸 **Screenshot**: *Multi-Session Debugging*
+> 
+> This screenshot will show the debugger managing multiple concurrent debug sessions, demonstrating how AI agents can debug different scripts simultaneously with isolated session management.
+> 
+> <!-- To capture this screenshot, see examples/visualizer/capture_guide.md -->
+> <!-- Uncomment when multi-session.png is available:
+> ![Multi-session Debugging](assets/screenshots/multi-session.png)
+> *Managing multiple debug sessions simultaneously*
+> -->
 
 ## 💡 Example: Debugging Python Code
 
@@ -214,6 +261,16 @@ Then get the local variables:
   "variablesReference": 5
 }
 ```
+
+> 📸 **Screenshot**: *Variable Inspection Reveals the Bug*
+> 
+> This screenshot will show the TUI visualizer after stepping over line 4, where both variables incorrectly show value 20, clearly demonstrating the variable swap bug. The left panel shows the execution state, the center shows the highlighted code, and the right panel displays the incorrect variable values.
+> 
+> <!-- To capture this screenshot, see examples/visualizer/capture_guide.md -->
+> <!-- Uncomment when variable-inspection.png is available:
+> ![Variable Inspection](assets/screenshots/variable-inspection.png)
+> *After stepping over line 4, both variables incorrectly show value 20*
+> -->
 
 ## 📖 Documentation
 

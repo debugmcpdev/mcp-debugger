@@ -18,13 +18,15 @@ import {
   IFileSystem, 
   INetworkManager, 
   ILogger,
-  IProxyManagerFactory
+  IProxyManagerFactory,
+  IEnvironment
 } from '../interfaces/external-dependencies.js';
 import { ISessionStoreFactory } from '../factories/session-store-factory.js';
 import { IProxyManager, ProxyConfig } from '../proxy/proxy-manager.js';
 import { IDebugTargetLauncher } from '../interfaces/process-interfaces.js';
 import { ErrorMessages } from '../utils/error-messages.js';
 import { findPythonExecutable } from '../utils/python-utils.js';
+import { PathTranslator } from '../utils/path-translator.js';
 
 // Custom launch arguments interface extending DebugProtocol.LaunchRequestArguments
 interface CustomLaunchRequestArguments extends DebugProtocol.LaunchRequestArguments {
@@ -53,6 +55,7 @@ export interface SessionManagerDependencies {
   proxyManagerFactory: IProxyManagerFactory;
   sessionStoreFactory: ISessionStoreFactory;
   debugTargetLauncher: IDebugTargetLauncher;
+  environment: IEnvironment;
 }
 
 /**
@@ -73,6 +76,7 @@ export class SessionManager {
   private proxyManagerFactory: IProxyManagerFactory;
   private sessionStoreFactory: ISessionStoreFactory;
   private debugTargetLauncher: IDebugTargetLauncher;
+  private pathTranslator: PathTranslator; // Add PathTranslator instance
 
   private defaultDapLaunchArgs: Partial<CustomLaunchRequestArguments>;
   private dryRunTimeoutMs: number;
@@ -93,6 +97,7 @@ export class SessionManager {
     this.proxyManagerFactory = dependencies.proxyManagerFactory;
     this.sessionStoreFactory = dependencies.sessionStoreFactory;
     this.debugTargetLauncher = dependencies.debugTargetLauncher;
+    this.pathTranslator = new PathTranslator(this.fileSystem, this.logger, dependencies.environment);
     
     this.sessionStore = this.sessionStoreFactory.create();
     this.logDirBase = config.logDirBase || path.join(os.tmpdir(), 'debug-mcp-server', 'sessions');
@@ -140,19 +145,20 @@ export class SessionManager {
     const adapterPort = await this.findFreePort();
 
     // Resolve paths
-    const projectRoot = path.resolve(fileURLToPath(import.meta.url), '../../../');
+    const projectRoot = path.resolve(fileURLToPath(import.meta.url), '../../../'); // Path to the MCP debugger server's root
     
     const initialBreakpoints = Array.from(session.breakpoints.values()).map(bp => {
-        const absoluteBpPath = path.isAbsolute(bp.file) ? bp.file : path.resolve(projectRoot, bp.file);
+        // Breakpoint file path is already translated by server.ts before reaching here
         return {
-            file: absoluteBpPath, 
+            file: bp.file, // Use the already translated path
             line: bp.line, 
             condition: bp.condition
         };
     });
     
-    const absoluteScriptPath = path.resolve(projectRoot, scriptPath);
-    this.logger.info(`[SessionManager] Resolved script path: ${absoluteScriptPath}`);
+    // scriptPath is already translated by server.ts before reaching here
+    const translatedScriptPath = scriptPath; 
+    this.logger.info(`[SessionManager] Using translated script path: ${translatedScriptPath}`);
 
     // Resolve Python path with intelligent detection
     let resolvedPythonPath: string;
@@ -162,17 +168,23 @@ export class SessionManager {
       // Absolute path provided - use as-is
       resolvedPythonPath = pythonPathFromSession;
     } else if (['python', 'python3', 'py'].includes(pythonPathFromSession.toLowerCase())) {
-      // Common Python commands - use auto-detection
+      // Common Python commands - use auto-detection without preferredPath
       try {
-        resolvedPythonPath = await findPythonExecutable(pythonPathFromSession, this.logger);
+        resolvedPythonPath = await findPythonExecutable(undefined, this.logger);
         this.logger.info(`[SessionManager] Auto-detected Python executable: ${resolvedPythonPath}`);
       } catch (error) {
         this.logger.error(`[SessionManager] Failed to find Python executable:`, error);
         throw error;
       }
     } else {
-      // Relative path - resolve from project root
+      // Relative path - resolve from project root (MCP server's root)
       resolvedPythonPath = path.resolve(projectRoot, pythonPathFromSession);
+    }
+
+    // In container mode, Python executables are system binaries and should NOT be translated
+    // Only user script paths need translation, not the Python interpreter itself
+    if (this.pathTranslator.isContainerMode()) {
+      this.logger.info(`[SessionManager] Container mode: Using Python path as-is (system binary): ${resolvedPythonPath}`);
     }
     
     this.logger.info(`[SessionManager] Using Python path: ${resolvedPythonPath}`);
@@ -190,7 +202,7 @@ export class SessionManager {
       adapterHost: '127.0.0.1',
       adapterPort,
       logDir: sessionLogDir,
-      scriptPath: absoluteScriptPath,
+      scriptPath: translatedScriptPath, // Use the already translated script path
       scriptArgs,
       stopOnEntry: effectiveLaunchArgs.stopOnEntry,
       justMyCode: effectiveLaunchArgs.justMyCode,
@@ -222,6 +234,17 @@ export class SessionManager {
       this.logger.debug(`[SessionManager] 'stopped' event handler called for session ${sessionId}`);
       this.logger.info(`[ProxyManager ${sessionId}] Stopped event: thread=${threadId}, reason=${reason}`);
       
+      // Log debug state change with structured logging
+      // Note: We don't have location info at this point, but that could be added later if needed
+      this.logger.info('debug:state', {
+        event: 'paused',
+        sessionId: sessionId,
+        sessionName: session.name,
+        reason: reason,
+        threadId: threadId,
+        timestamp: Date.now()
+      });
+      
       // Handle auto-continue for stopOnEntry=false
       if (!effectiveLaunchArgs.stopOnEntry && reason === 'entry') {
         this.logger.info(`[ProxyManager ${sessionId}] Auto-continuing (stopOnEntry=false)`);
@@ -239,6 +262,15 @@ export class SessionManager {
     const handleContinued = () => {
       this.logger.debug(`[SessionManager] 'continued' event handler called for session ${sessionId}`);
       this.logger.info(`[ProxyManager ${sessionId}] Continued event`);
+      
+      // Log debug state change with structured logging
+      this.logger.info('debug:state', {
+        event: 'running',
+        sessionId: sessionId,
+        sessionName: session.name,
+        timestamp: Date.now()
+      });
+      
       this._updateSessionState(session, SessionState.RUNNING);
     };
     proxyManager.on('continued', handleContinued);
@@ -248,6 +280,15 @@ export class SessionManager {
     const handleTerminated = () => {
       this.logger.debug(`[SessionManager] 'terminated' event handler called for session ${sessionId}`);
       this.logger.info(`[ProxyManager ${sessionId}] Terminated event`);
+      
+      // Log debug state change with structured logging
+      this.logger.info('debug:state', {
+        event: 'stopped',
+        sessionId: sessionId,
+        sessionName: session.name,
+        timestamp: Date.now()
+      });
+      
       this._updateSessionState(session, SessionState.STOPPED);
       
       // Clean up listeners since proxy is gone
@@ -549,12 +590,12 @@ export class SessionManager {
     const session = this._getSessionById(sessionId);
     const bpId = uuidv4();
 
-    // Resolve breakpoint file path to absolute
-    const projectRoot = path.resolve(fileURLToPath(import.meta.url), '../../../'); 
-    const absoluteFilePath = path.isAbsolute(file) ? path.normalize(file) : path.resolve(projectRoot, file);
-    this.logger.info(`[SessionManager setBreakpoint] Resolved file path "${file}" to "${absoluteFilePath}" for session ${sessionId}`);
+    // The file path is already translated by server.ts before reaching here
+    // No need for projectRoot resolution here.
+    const translatedFilePath = file; 
+    this.logger.info(`[SessionManager setBreakpoint] Using translated file path "${translatedFilePath}" for session ${sessionId}`);
 
-    const newBreakpoint: Breakpoint = { id: bpId, file: absoluteFilePath, line, condition, verified: false };
+    const newBreakpoint: Breakpoint = { id: bpId, file: translatedFilePath, line, condition, verified: false };
 
     if (!session.breakpoints) session.breakpoints = new Map();
     session.breakpoints.set(bpId, newBreakpoint);
@@ -572,6 +613,20 @@ export class SessionManager {
               newBreakpoint.verified = bpInfo.verified;
               newBreakpoint.line = bpInfo.line || newBreakpoint.line; 
               this.logger.info(`[SessionManager] Breakpoint ${bpId} sent and response received. Verified: ${newBreakpoint.verified}`);
+              
+              // Log breakpoint verification with structured logging
+              if (newBreakpoint.verified) {
+                this.logger.info('debug:breakpoint', {
+                  event: 'verified',
+                  sessionId: sessionId,
+                  sessionName: session.name,
+                  breakpointId: bpId,
+                  file: newBreakpoint.file,
+                  line: newBreakpoint.line,
+                  verified: true,
+                  timestamp: Date.now()
+                });
+              }
           }
       } catch (error) {
           this.logger.error(`[SessionManager] Error sending setBreakpoint to proxy for session ${sessionId}:`, error);

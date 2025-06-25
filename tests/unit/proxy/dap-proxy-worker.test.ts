@@ -37,7 +37,7 @@ describe('DapProxyWorker', () => {
       connect: vi.fn().mockResolvedValue(undefined),
       sendRequest: vi.fn().mockResolvedValue({ body: {} }),
       disconnect: vi.fn(),
-      shutdown: vi.fn().mockImplementation((reason?: string) => {
+      shutdown: vi.fn().mockImplementation(() => {
         // Mock implementation that mimics the real shutdown behavior
         // In a real implementation, this would reject pending requests
       }),
@@ -155,26 +155,8 @@ describe('DapProxyWorker', () => {
       );
     });
 
-    it('should validate script path is absolute', async () => {
-      const initPayload: ProxyInitPayload = {
-        cmd: 'init',
-        sessionId: 'test-session',
-        pythonPath: '/usr/bin/python3',
-        adapterHost: 'localhost',
-        adapterPort: 5678,
-        logDir: '/tmp/logs',
-        scriptPath: 'relative/path/script.py' // Not absolute
-      };
-
-      await worker.handleCommand(initPayload);
-
-      expect(messageSendSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'error',
-          message: expect.stringContaining('Script path is not absolute')
-        })
-      );
-    });
+    // Test removed: Path validation is now handled by PathTranslator at the server level
+    // The proxy worker only validates that the path exists, not whether it's absolute
 
     it('should validate script path exists', async () => {
       mockDependencies.fileSystem.pathExists = vi.fn().mockResolvedValue(false);
@@ -360,7 +342,7 @@ describe('DapProxyWorker', () => {
   });
 
   describe('event handling', () => {
-    let eventHandlers: Record<string, Function>;
+    let eventHandlers: Record<string, (...args: unknown[]) => void>;
 
     beforeEach(async () => {
       // Initialize worker

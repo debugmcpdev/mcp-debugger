@@ -28,6 +28,7 @@ export interface IFileSystem {
   ensureDir(path: string): Promise<void>;
   ensureDirSync(path: string): void;
   pathExists(path: string): Promise<boolean>;
+  existsSync(path: string): boolean;
   remove(path: string): Promise<void>;
   copy(src: string, dest: string): Promise<void>;
   outputFile(file: string, data: string | Buffer): Promise<void>;
@@ -95,6 +96,16 @@ export interface IProxyManagerFactory {
 }
 
 /**
+ * Environment abstraction interface
+ * Provides access to environment variables and current working directory
+ */
+export interface IEnvironment {
+  get(key: string): string | undefined;
+  getAll(): Record<string, string | undefined>;
+  getCurrentWorkingDirectory(): string;
+}
+
+/**
  * Complete set of dependencies for dependency injection
  */
 export interface IDependencies {
@@ -102,6 +113,7 @@ export interface IDependencies {
   processManager: IProcessManager;
   networkManager: INetworkManager;
   logger: ILogger;
+  environment: IEnvironment;
 }
 
 /**

@@ -95,16 +95,21 @@ export default defineConfig({
         singleThread: true // Important for process spawning tests
       }
     },
+    testTransformMode: {
+      web: ['src/**/*.ts'] // Ensure TypeScript files in src are transformed
+    },
     // Module name mapper equivalent
     alias: {
       // Handle .js extensions in imports (strip them)
       '^(\\.{1,2}/.+)\\.js$': '$1',
       // Handle absolute imports with .js extension
       '^(src/.+)\\.js$': path.resolve(__dirname, '$1'),
-      '@/': path.resolve(__dirname, './src')
+      '@/': path.resolve(__dirname, './src'),
+      '../../src/(.*)': path.resolve(__dirname, './src/$1.ts') // Direct alias for relative imports to src
     }
   },
   resolve: {
+    extensions: ['.ts', '.js', '.json', '.node'], // Add .ts for resolution
     alias: {
       '@': path.resolve(__dirname, './src')
     }

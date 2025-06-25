@@ -9,7 +9,8 @@ import {
   IFileSystem, 
   INetworkManager, 
   ILogger,
-  IProxyManagerFactory
+  IProxyManagerFactory,
+  IEnvironment
 } from '../../../src/interfaces/external-dependencies.js';
 import { IDebugTargetLauncher } from '../../../src/interfaces/process-interfaces.js';
 import { createMockFileSystem, createMockLogger } from '../../utils/test-utils.js';
@@ -36,6 +37,17 @@ vi.mock('./dist/proxy/proxy-manager.js', () => ({
 }));
 
 /**
+ * Create a mock environment for testing
+ */
+export function createMockEnvironment(overrides?: Partial<Record<string, string>>): IEnvironment {
+  return {
+    get: vi.fn((key: string) => overrides?.[key] || process.env[key]),
+    getAll: vi.fn(() => ({ ...process.env, ...overrides })),
+    getCurrentWorkingDirectory: vi.fn(() => process.cwd())
+  };
+}
+
+/**
  * Create mock dependencies for testing
  */
 export function createMockDependencies(): SessionManagerDependencies & { 
@@ -43,10 +55,12 @@ export function createMockDependencies(): SessionManagerDependencies & {
   mockFileSystem: IFileSystem;
   mockLogger: ILogger;
   mockNetworkManager: INetworkManager;
+  mockEnvironment: IEnvironment;
 } {
   const mockProxyManager = new MockProxyManager();
   const mockFileSystem = createMockFileSystem();
   const mockLogger = createMockLogger();
+  const mockEnvironment = createMockEnvironment();
   
   const mockNetworkManager: INetworkManager = {
     createServer: vi.fn(),
@@ -72,9 +86,11 @@ export function createMockDependencies(): SessionManagerDependencies & {
     mockFileSystem,
     mockLogger,
     mockNetworkManager,
+    mockEnvironment,
     fileSystem: mockFileSystem,
     networkManager: mockNetworkManager,
     logger: mockLogger,
+    environment: mockEnvironment,
     proxyManagerFactory: mockProxyManagerFactory,
     sessionStoreFactory: mockSessionStoreFactory,
     debugTargetLauncher: mockDebugTargetLauncher

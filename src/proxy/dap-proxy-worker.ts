@@ -101,11 +101,8 @@ export class DapProxyWorker {
         this.logger
       );
 
-      // Validate script path
-      if (!path.isAbsolute(payload.scriptPath)) {
-        throw new Error(`Script path is not absolute: ${payload.scriptPath}`);
-      }
-
+      // Validate script path exists
+      // Note: The server-level PathTranslator already resolves relative paths to absolute paths
       const scriptExists = await this.dependencies.fileSystem.pathExists(payload.scriptPath);
       if (!scriptExists) {
         throw new Error(`Script path not found: ${payload.scriptPath}`);
